@@ -1,0 +1,20 @@
+{
+  "total_samples": 9750,
+  "label_distribution_full": {
+    "Negative": 3333,
+    "Neutral": 3084,
+    "Positive": 3333
+  },
+  "train_samples": 7800,
+  "val_samples": 975,
+  "test_samples": 975,
+  "train_ratio": 0.8,
+  "val_ratio": 0.1,
+  "test_ratio": 0.1,
+  "class_weights": {
+    "Negative": 0.9752,
+    "Neutral": 1.0539,
+    "Positive": 0.9749
+  },
+  "stratified": true
+}

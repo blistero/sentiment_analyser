@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+{% block title %}Voice Input — SentimentAI{% endblock %}
+{% block page_title %}Voice Input{% endblock %}
+
+{% block content %}
+<div class="voice-page">
+  <div class="voice-tabs">
+    <button class="tab-btn active" onclick="switchTab('mic', this)">🎤 Live Microphone</button>
+    <button class="tab-btn" onclick="switchTab('upload', this)">📁 Upload Audio</button>
+  </div>
+
+  <!-- Microphone Tab (Web Speech API — no PyAudio needed) -->
+  <div id="tab-mic" class="tab-panel">
+    <div class="mic-card">
+      <h3>Live Microphone</h3>
+      <p class="upload-hint" id="mic-support-msg">Speak your review — transcription happens directly in the browser, no server microphone needed.</p>
+
+      <div id="browser-mic-section">
+        <div class="mic-visualizer" id="mic-visualizer">
+          <div class="mic-ring" id="mic-ring"></div>
+          <span class="mic-icon-large" id="mic-icon-display">🎙️</span>
+        </div>
+
+        <div id="interim-text" class="interim-transcript"></div>
+
+        <div class="mic-btn-row">
+          <button class="btn-record" id="mic-start-btn" onclick="startListening()">
+            🎙️ Start Recording
+          </button>
+          <button class="btn-stop hidden" id="mic-stop-btn" onclick="stopListening()">
+            ⏹ Stop
+          </button>
+        </div>
+
+        <div id="mic-status" class="mic-status"></div>
+
+        <div id="transcript-preview" class="transcript-preview hidden">
+          <h4>Transcript</h4>
+          <p id="transcript-preview-text" class="transcript-text"></p>
+          <button class="btn-primary" onclick="analyzeTranscript()">🎯 Analyze Sentiment</button>
+          <button class="btn-secondary" onclick="clearTranscript()">🔄 Record Again</button>
+        </div>
+      </div>
+
+      <!-- Shown when browser doesn't support Web Speech API -->
+      <div id="nospeech-fallback" class="hidden">
+        <div class="warn-box">
+          ⚠️ Your browser does not support the Web Speech API (speech-to-text).<br>
+          Please use <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> for live mic recording,
+          or switch to the <strong>Upload Audio</strong> tab.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Audio Tab -->
+  <div id="tab-upload" class="tab-panel hidden">
+    <div class="upload-card">
+      <h3>Upload Audio File</h3>
+      <p class="upload-hint">Supported formats: WAV, MP3, OGG, FLAC — Max 32MB</p>
+      <div class="dropzone" id="audio-dropzone"
+           ondragover="event.preventDefault(); this.classList.add('drag-over')"
+           ondragleave="this.classList.remove('drag-over')"
+           ondrop="handleAudioDrop(event)">
+        <input type="file" id="audio-input" accept=".wav,.mp3,.ogg,.flac" hidden onchange="handleAudioSelect(this)" />
+        <div class="drop-icon">🎵</div>
+        <p class="drop-text">Drop audio file here or</p>
+        <button class="btn-primary" onclick="document.getElementById('audio-input').click()">Browse</button>
+      </div>
+      <div id="audio-file-info" class="file-info hidden">
+        <span class="file-icon">🎵</span>
+        <span id="audio-file-name"></span>
+      </div>
+      <button class="btn-primary btn-wide" id="audio-analyze-btn" onclick="analyzeAudio()" disabled>
+        🎯 Transcribe & Analyze
+      </button>
+    </div>
+  </div>
+
+  <!-- Shared result panel -->
+  <div id="voice-result" class="result-panel hidden">
+    <h3>Voice Analysis Result</h3>
+    <div class="transcript-box">
+      <h4>Transcript</h4>
+      <p id="transcript-text" class="transcript-text"></p>
+      <span id="transcript-conf" class="transcript-conf"></span>
+    </div>
+    <div id="voice-sentiment-result"></div>
+    <button class="btn-secondary" style="margin-top:1rem" onclick="resetVoicePage()">🔄 Analyze Another</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let selectedAudio = null;
+let recognition   = null;
+let finalTranscript = "";
+let isListening   = false;
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+  btn.classList.add('active');
+  document.getElementById(`tab-${tab}`).classList.remove('hidden');
+}
+
+// ── Web Speech API setup ──────────────────────────────────────────────────────
+(function initSpeechAPI() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    document.getElementById('browser-mic-section').classList.add('hidden');
+    document.getElementById('nospeech-fallback').classList.remove('hidden');
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;   // show live partial results
+  recognition.maxAlternatives = 1;
+  recognition.continuous = false;      // stops automatically after a pause
+
+  recognition.onstart = function() {
+    isListening = true;
+    setMicState('listening');
+    setStatus('🔴 Listening… speak now');
+  };
+
+  recognition.onresult = function(event) {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalTranscript += t + ' ';
+      } else {
+        interim += t;
+      }
+    }
+    document.getElementById('interim-text').textContent = interim || finalTranscript.trim();
+  };
+
+  recognition.onspeechend = function() {
+    recognition.stop();
+  };
+
+  recognition.onerror = function(event) {
+    isListening = false;
+    setMicState('idle');
+    const msgs = {
+      'not-allowed':   '❌ Microphone permission denied. Click the 🔒 icon in the address bar and allow microphone.',
+      'no-speech':     '⚠️ No speech detected. Please try again.',
+      'network':       '❌ Network error — speech recognition needs an internet connection.',
+      'aborted':       '',
+      'audio-capture': '❌ No microphone found. Please connect a microphone and try again.',
+    };
+    const msg = msgs[event.error] || `❌ Error: ${event.error}`;
+    if (msg) setStatus(msg);
+  };
+
+  recognition.onend = function() {
+    isListening = false;
+    setMicState('idle');
+    const transcript = finalTranscript.trim();
+    if (transcript) {
+      setStatus('✅ Done. Review transcript below.');
+      document.getElementById('interim-text').textContent = '';
+      document.getElementById('transcript-preview-text').textContent = transcript;
+      document.getElementById('transcript-preview').classList.remove('hidden');
+    } else if (!document.getElementById('mic-status').textContent.startsWith('❌')) {
+      setStatus('⚠️ No speech captured. Try speaking louder or closer to the mic.');
+    }
+  };
+})();
+
+// ── Mic controls ──────────────────────────────────────────────────────────────
+function startListening() {
+  if (!recognition) return;
+  finalTranscript = '';
+  document.getElementById('interim-text').textContent = '';
+  document.getElementById('transcript-preview').classList.add('hidden');
+  document.getElementById('voice-result').classList.add('hidden');
+  setStatus('');
+  try {
+    recognition.start();
+  } catch(e) {
+    // already started — stop and restart
+    recognition.stop();
+    setTimeout(() => recognition.start(), 300);
+  }
+}
+
+function stopListening() {
+  if (recognition && isListening) {
+    recognition.stop();
+  }
+}
+
+function setMicState(state) {
+  const startBtn = document.getElementById('mic-start-btn');
+  const stopBtn  = document.getElementById('mic-stop-btn');
+  const ring     = document.getElementById('mic-ring');
+
+  if (state === 'listening') {
+    startBtn.classList.add('hidden');
+    stopBtn.classList.remove('hidden');
+    ring.classList.add('active');
+  } else {
+    startBtn.classList.remove('hidden');
+    stopBtn.classList.add('hidden');
+    ring.classList.remove('active');
+  }
+}
+
+function setStatus(msg) {
+  document.getElementById('mic-status').textContent = msg;
+}
+
+// ── Transcript → sentiment ────────────────────────────────────────────────────
+async function analyzeTranscript() {
+  const text = finalTranscript.trim();
+  if (!text) { setStatus('⚠️ No transcript to analyze.'); return; }
+
+  setStatus('⏳ Analyzing sentiment…');
+  document.getElementById('transcript-preview').querySelector('button').disabled = true;
+
+  try {
+    const res = await fetch('/api/voice_predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transcript: text })
+    });
+    const data = await res.json();
+    if (data.error) { setStatus('❌ ' + data.error); return; }
+    setStatus('');
+    showVoiceResult(data, text, 1.0);
+  } catch(e) {
+    setStatus('❌ Request failed: ' + e.message);
+  } finally {
+    const btn = document.getElementById('transcript-preview').querySelector('button');
+    if (btn) btn.disabled = false;
+  }
+}
+
+function clearTranscript() {
+  finalTranscript = '';
+  document.getElementById('interim-text').textContent = '';
+  document.getElementById('transcript-preview').classList.add('hidden');
+  document.getElementById('voice-result').classList.add('hidden');
+  setStatus('');
+}
+
+// ── Audio file upload ─────────────────────────────────────────────────────────
+function handleAudioDrop(event) {
+  event.preventDefault();
+  document.getElementById('audio-dropzone').classList.remove('drag-over');
+  const file = event.dataTransfer.files[0];
+  if (file) setAudioFile(file);
+}
+
+function handleAudioSelect(input) {
+  if (input.files[0]) setAudioFile(input.files[0]);
+}
+
+function setAudioFile(file) {
+  selectedAudio = file;
+  document.getElementById('audio-file-name').textContent = file.name;
+  document.getElementById('audio-file-info').classList.remove('hidden');
+  document.getElementById('audio-analyze-btn').disabled = false;
+}
+
+async function analyzeAudio() {
+  if (!selectedAudio) return;
+  const btn = document.getElementById('audio-analyze-btn');
+  btn.textContent = '⏳ Processing…';
+  btn.disabled = true;
+
+  const fd = new FormData();
+  fd.append('audio', selectedAudio);
+
+  try {
+    const res = await fetch('/api/voice_predict', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+    showVoiceResult(data, data.transcript || data.original_text, data.transcript_confidence);
+  } catch(e) {
+    alert('Voice analysis failed: ' + e.message);
+  } finally {
+    btn.textContent = '🎯 Transcribe & Analyze';
+    btn.disabled = false;
+  }
+}
+
+// ── Render result ─────────────────────────────────────────────────────────────
+function showVoiceResult(d, transcript, tconf) {
+  const panel = document.getElementById('voice-result');
+  panel.classList.remove('hidden');
+
+  document.getElementById('transcript-text').textContent = transcript || d.original_text || '(no transcript)';
+  document.getElementById('transcript-conf').textContent =
+    tconf && tconf < 1.0 ? `Transcript confidence: ${(tconf * 100).toFixed(0)}%` : '';
+
+  const icons = { Positive: '✅', Negative: '❌', Neutral: '⚪' };
+  const sent  = d.predicted_sentiment;
+  const prob  = d.probabilities || {};
+
+  document.getElementById('voice-sentiment-result').innerHTML = `
+    <div class="result-box result-${sent.toLowerCase()}">
+      <div class="result-main">
+        ${icons[sent] || ''} <strong>${sent}</strong>
+        <span class="conf-badge">${(d.confidence_score * 100).toFixed(1)}%</span>
+        ${d.sarcasm_detected ? '<span class="sarcasm-tag">😏 Sarcasm detected</span>' : ''}
+      </div>
+      <div class="result-bars">
+        <div class="bar-row">
+          <span>Positive</span>
+          <div class="bar"><div class="bar-fill positive" style="width:${((prob.positive||0)*100).toFixed(0)}%"></div></div>
+          <span>${((prob.positive||0)*100).toFixed(1)}%</span>
+        </div>
+        <div class="bar-row">
+          <span>Neutral</span>
+          <div class="bar"><div class="bar-fill neutral" style="width:${((prob.neutral||0)*100).toFixed(0)}%"></div></div>
+          <span>${((prob.neutral||0)*100).toFixed(1)}%</span>
+        </div>
+        <div class="bar-row">
+          <span>Negative</span>
+          <div class="bar"><div class="bar-fill negative" style="width:${((prob.negative||0)*100).toFixed(0)}%"></div></div>
+          <span>${((prob.negative||0)*100).toFixed(1)}%</span>
+        </div>
+      </div>
+      <div class="result-meta">
+        BERT: <strong>${d.bert_sentiment || '—'}</strong> &nbsp;|&nbsp;
+        VADER: <strong>${d.vader_sentiment || '—'}</strong> &nbsp;|&nbsp;
+        Time: <strong>${d.processing_time_ms || '—'} ms</strong>
+      </div>
+    </div>`;
+
+  panel.scrollIntoView({ behavior: 'smooth' });
+}
+
+function resetVoicePage() {
+  finalTranscript = '';
+  selectedAudio = null;
+  document.getElementById('voice-result').classList.add('hidden');
+  document.getElementById('transcript-preview').classList.add('hidden');
+  document.getElementById('interim-text').textContent = '';
+  document.getElementById('audio-file-info').classList.add('hidden');
+  document.getElementById('audio-analyze-btn').disabled = true;
+  setStatus('');
+}
+</script>
+{% endblock %}

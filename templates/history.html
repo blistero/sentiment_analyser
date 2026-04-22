@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}History — SentimentAI{% endblock %}
+{% block page_title %}Prediction History{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn-secondary" onclick="exportCSV()">⬇ Export CSV</button>
+<button class="btn-danger-sm" onclick="if(confirm('Clear all history?')) clearHistory()">🗑 Clear All</button>
+{% endblock %}
+
+{% block content %}
+<div class="history-page">
+  <!-- Filters -->
+  <div class="filter-bar">
+    <select id="filter-sentiment" onchange="loadHistory(1)" class="filter-select">
+      <option value="">All Sentiments</option>
+      <option value="Positive">Positive</option>
+      <option value="Negative">Negative</option>
+      <option value="Neutral">Neutral</option>
+    </select>
+    <select id="filter-source" onchange="loadHistory(1)" class="filter-select">
+      <option value="">All Sources</option>
+      <option value="api">API</option>
+      <option value="batch">Batch</option>
+      <option value="voice">Voice</option>
+      <option value="web">Web</option>
+    </select>
+    <span id="total-count" class="filter-count"></span>
+  </div>
+
+  <div class="table-card">
+    <table class="data-table" id="history-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Text</th>
+          <th>Sentiment</th>
+          <th>Confidence</th>
+          <th>Sarcasm</th>
+          <th>BERT</th>
+          <th>VADER</th>
+          <th>Source</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="history-tbody">
+        <tr><td colspan="9" class="empty-row">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination" id="pagination"></div>
+</div>
+
+<!-- Detail Modal -->
+<div id="detail-modal" class="modal hidden">
+  <div class="modal-overlay" onclick="closeModal()"></div>
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3>Prediction Detail</h3>
+      <button onclick="closeModal()">✕</button>
+    </div>
+    <div id="modal-body" class="modal-body"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentPage = 1;
+
+async function loadHistory(page = 1) {
+  currentPage = page;
+  const sentiment = document.getElementById('filter-sentiment').value;
+  const source = document.getElementById('filter-source').value;
+  let url = `/api/history?page=${page}&per_page=20`;
+  if (sentiment) url += `&sentiment=${sentiment}`;
+  if (source) url += `&source=${source}`;
+
+  const res = await fetch(url);
+  const data = await res.json();
+
+  document.getElementById('total-count').textContent = `${data.total.toLocaleString()} records`;
+  renderTable(data.records);
+  renderPagination(data.current_page, data.pages);
+}
+
+function renderTable(records) {
+  const tbody = document.getElementById('history-tbody');
+  if (!records.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-row">No records found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = records.map(r => `
+    <tr class="clickable" onclick="showDetail(${r.id})">
+      <td>${r.id}</td>
+      <td class="text-cell" title="${escHtml(r.original_text)}">${escHtml(r.original_text.substring(0,70))}${r.original_text.length>70?'...':''}</td>
+      <td><span class="badge badge-${r.predicted_sentiment.toLowerCase()}">${r.predicted_sentiment}</span></td>
+      <td>${(r.confidence_score*100).toFixed(1)}%</td>
+      <td>${r.sarcasm_detected ? '<span class="sarcasm-badge">😏</span>' : '—'}</td>
+      <td>${r.bert_sentiment || '—'}</td>
+      <td>${r.vader_sentiment || '—'}</td>
+      <td><span class="source-badge">${r.source}</span></td>
+      <td class="time-cell">${formatTime(r.timestamp)}</td>
+    </tr>`).join('');
+}
+
+function renderPagination(current, total) {
+  const pg = document.getElementById('pagination');
+  if (total <= 1) { pg.innerHTML = ''; return; }
+  let html = '';
+  if (current > 1) html += `<button onclick="loadHistory(${current-1})">‹ Prev</button>`;
+  const start = Math.max(1, current - 2);
+  const end = Math.min(total, current + 2);
+  for (let i = start; i <= end; i++) {
+    html += `<button class="${i===current?'active':''}" onclick="loadHistory(${i})">${i}</button>`;
+  }
+  if (current < total) html += `<button onclick="loadHistory(${current+1})">Next ›</button>`;
+  pg.innerHTML = html;
+}
+
+async function showDetail(id) {
+  const res = await fetch(`/api/history/${id}`);
+  const r = await res.json();
+  document.getElementById('modal-body').innerHTML = `
+    <div class="detail-grid">
+      <div><strong>Sentiment:</strong> <span class="badge badge-${r.predicted_sentiment.toLowerCase()}">${r.predicted_sentiment}</span></div>
+      <div><strong>Confidence:</strong> ${(r.confidence_score*100).toFixed(2)}%</div>
+      <div><strong>BERT:</strong> ${r.bert_sentiment}</div>
+      <div><strong>VADER:</strong> ${r.vader_sentiment} (${r.vader_compound})</div>
+      <div><strong>Sarcasm:</strong> ${r.sarcasm_detected ? 'Yes ('+((r.sarcasm_confidence||0)*100).toFixed(1)+'%)' : 'No'}</div>
+      <div><strong>Source:</strong> ${r.source}</div>
+      <div><strong>Time:</strong> ${formatTime(r.timestamp)}</div>
+    </div>
+    <div class="detail-section"><strong>Original Text:</strong><p>${escHtml(r.original_text)}</p></div>
+    <div class="detail-section"><strong>Cleaned Text:</strong><p>${escHtml(r.cleaned_text||'—')}</p></div>
+    <div class="detail-section"><strong>Probabilities:</strong>
+      <div class="bar-row"><span>Positive</span><div class="bar"><div class="bar-fill positive" style="width:${(r.probabilities.positive*100).toFixed(0)}%"></div></div><span>${(r.probabilities.positive*100).toFixed(1)}%</span></div>
+      <div class="bar-row"><span>Neutral</span><div class="bar"><div class="bar-fill neutral" style="width:${(r.probabilities.neutral*100).toFixed(0)}%"></div></div><span>${(r.probabilities.neutral*100).toFixed(1)}%</span></div>
+      <div class="bar-row"><span>Negative</span><div class="bar"><div class="bar-fill negative" style="width:${(r.probabilities.negative*100).toFixed(0)}%"></div></div><span>${(r.probabilities.negative*100).toFixed(1)}%</span></div>
+    </div>`;
+  document.getElementById('detail-modal').classList.remove('hidden');
+}
+
+function closeModal() { document.getElementById('detail-modal').classList.add('hidden'); }
+
+async function clearHistory() {
+  await fetch('/api/history/clear', { method: 'DELETE' });
+  loadHistory(1);
+}
+
+function exportCSV() { window.location.href = '/api/analytics/export'; }
+
+function formatTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+document.addEventListener('DOMContentLoaded', () => loadHistory(1));
+</script>
+{% endblock %}

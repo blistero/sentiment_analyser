@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Analyze Text — SentimentAI{% endblock %}
+{% block page_title %}Analyze Text{% endblock %}
+
+{% block content %}
+<div class="analyze-page">
+  <div class="analyze-input-card">
+    <h3>Enter Text for Analysis</h3>
+    <div class="text-input-wrap">
+      <textarea id="review-input" class="main-textarea" placeholder="Paste a review, comment, feedback, tweet, or any text here..." rows="6"></textarea>
+      <div class="input-footer">
+        <span id="char-count" class="char-count">0 / 10,000</span>
+        <div class="input-actions">
+          <button class="btn-secondary" onclick="clearInput()">Clear</button>
+          <button class="btn-primary" id="analyze-btn" onclick="analyze()">
+            <span class="btn-text">Analyze Sentiment</span>
+            <span class="btn-spinner hidden"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Example reviews -->
+    <div class="examples-section">
+      <p class="examples-label">Try an example:</p>
+      <div class="examples-row">
+        <button class="example-chip positive" onclick="setExample(this)">This product is absolutely fantastic! Best purchase I've made.</button>
+        <button class="example-chip negative" onclick="setExample(this)">Terrible quality, broke after one day. Total waste of money.</button>
+        <button class="example-chip neutral" onclick="setExample(this)">The item arrived on time and works as described.</button>
+        <button class="example-chip sarcasm" onclick="setExample(this)">Oh great, another product that breaks immediately. Just what I needed.</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result panel -->
+  <div id="result-panel" class="result-panel hidden">
+    <div class="result-header">
+      <h3>Analysis Result</h3>
+      <div id="result-badge" class="result-badge-lg"></div>
+    </div>
+
+    <div class="result-grid">
+      <div class="result-section">
+        <h4>Sentiment Breakdown</h4>
+        <div class="prob-bars" id="prob-bars"></div>
+      </div>
+      <div class="result-section">
+        <h4>Model Details</h4>
+        <div class="detail-table" id="detail-table"></div>
+      </div>
+    </div>
+
+    <div class="result-section">
+      <h4>Cleaned Text</h4>
+      <div class="cleaned-text-box" id="cleaned-text"></div>
+    </div>
+
+    <!-- Sarcasm panel — always rendered, shown/hidden -->
+    <div class="sarcasm-panel" id="sarcasm-panel">
+      <div class="sarcasm-panel-header">
+        <span class="sarcasm-icon">😏</span>
+        <div class="sarcasm-panel-info">
+          <strong id="sarcasm-panel-title">Sarcasm Analysis</strong>
+          <span id="sarcasm-panel-sub" class="sarcasm-sub"></span>
+        </div>
+        <div class="sarcasm-conf-pill" id="sarcasm-conf-pill"></div>
+      </div>
+      <div class="sarcasm-meter-wrap">
+        <div class="sarcasm-meter-track">
+          <div class="sarcasm-meter-fill" id="sarcasm-meter-fill"></div>
+        </div>
+        <span class="sarcasm-meter-label" id="sarcasm-meter-label">0%</span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const textarea = document.getElementById('review-input');
+textarea.addEventListener('input', () => {
+  document.getElementById('char-count').textContent = `${textarea.value.length.toLocaleString()} / 10,000`;
+});
+
+function setExample(btn) {
+  textarea.value = btn.textContent;
+  textarea.dispatchEvent(new Event('input'));
+}
+
+function clearInput() {
+  textarea.value = '';
+  textarea.dispatchEvent(new Event('input'));
+  document.getElementById('result-panel').classList.add('hidden');
+}
+
+let _analyzing = false;
+
+async function analyze() {
+  if (_analyzing) return;
+  const text = textarea.value.trim();
+  if (!text) { showToast('Please enter some text to analyze.', 'error'); return; }
+  if (text.length > 10000) { showToast('Text too long (max 10,000 characters).', 'error'); return; }
+
+  _analyzing = true;
+  const btn = document.getElementById('analyze-btn');
+  btn.querySelector('.btn-text').textContent = 'Analyzing...';
+  btn.querySelector('.btn-spinner').classList.remove('hidden');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    const data = await res.json();
+    if (data.error) { showToast(data.error, 'error'); return; }
+    renderResult(data);
+    showToast('Analysis complete!', 'success');
+  } catch(e) {
+    showToast('Analysis failed. Is the server running?', 'error');
+  } finally {
+    btn.querySelector('.btn-text').textContent = 'Analyze Sentiment';
+    btn.querySelector('.btn-spinner').classList.add('hidden');
+    btn.disabled = false;
+    _analyzing = false;
+  }
+}
+
+function renderResult(d) {
+  const panel = document.getElementById('result-panel');
+  panel.classList.remove('hidden');
+
+  const icons = { Positive:'✅', Negative:'❌', Neutral:'⚪' };
+  const badge = document.getElementById('result-badge');
+  badge.className = `result-badge-lg badge-${d.predicted_sentiment.toLowerCase()}`;
+  badge.innerHTML = `${icons[d.predicted_sentiment]} ${d.predicted_sentiment} <span>${(d.confidence_score*100).toFixed(1)}%</span>`;
+
+  // Prob bars
+  const bars = document.getElementById('prob-bars');
+  const probs = [
+    { label: 'Positive', val: d.probabilities.positive, cls: 'positive' },
+    { label: 'Neutral',  val: d.probabilities.neutral,  cls: 'neutral' },
+    { label: 'Negative', val: d.probabilities.negative, cls: 'negative' },
+  ];
+  bars.innerHTML = probs.map(p => `
+    <div class="bar-row">
+      <span class="bar-label">${p.label}</span>
+      <div class="bar-track"><div class="bar-fill ${p.cls}" style="width:${(p.val*100).toFixed(1)}%"></div></div>
+      <span class="bar-pct">${(p.val*100).toFixed(1)}%</span>
+    </div>`).join('');
+
+  // Detail table
+  document.getElementById('detail-table').innerHTML = `
+    <div class="detail-row"><span>BERT Prediction</span><span>${d.bert_sentiment}</span></div>
+    <div class="detail-row"><span>VADER Prediction</span><span>${d.vader_sentiment}</span></div>
+    <div class="detail-row"><span>VADER Compound</span><span>${d.vader_scores.compound.toFixed(4)}</span></div>
+    <div class="detail-row"><span>Processing Time</span><span>${d.processing_time_ms.toFixed(1)}ms</span></div>
+    <div class="detail-row"><span>Source</span><span>${d.source}</span></div>
+  `;
+
+  document.getElementById('cleaned-text').textContent = d.cleaned_text;
+
+  // Sarcasm meter — always visible
+  const sarc_pct = (d.sarcasm_confidence * 100).toFixed(1);
+  const sarc_detected = d.sarcasm_detected;
+  const panel_el = document.getElementById('sarcasm-panel');
+  panel_el.className = 'sarcasm-panel ' + (sarc_detected ? 'sarcasm-detected' : 'sarcasm-clear');
+
+  document.getElementById('sarcasm-panel-title').textContent = sarc_detected
+    ? 'Sarcasm Detected'
+    : 'No Sarcasm Detected';
+  document.getElementById('sarcasm-panel-sub').textContent = sarc_detected
+    ? 'Sentiment may be inverted — text is likely ironic.'
+    : 'Text appears to be sincere.';
+
+  const pill = document.getElementById('sarcasm-conf-pill');
+  pill.textContent = sarc_pct + '%';
+  pill.className = 'sarcasm-conf-pill ' + (sarc_detected ? 'pill-high' : 'pill-low');
+
+  const fill = document.getElementById('sarcasm-meter-fill');
+  fill.style.width = sarc_pct + '%';
+  fill.className = 'sarcasm-meter-fill ' + (sarc_detected ? 'fill-high' : 'fill-low');
+  document.getElementById('sarcasm-meter-label').textContent = sarc_pct + '%';
+
+  panel.scrollIntoView({ behavior: 'smooth' });
+}
+
+// Enter key shortcut
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter') analyze();
+});
+</script>
+{% endblock %}

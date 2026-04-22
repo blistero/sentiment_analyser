@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}SentimentAI{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-icon">🧠</span>
+        <span class="brand-text">SentimentAI</span>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
+          <span class="nav-icon">📊</span> Dashboard
+        </a>
+        <a href="/analyze" class="nav-item {% if request.path == '/analyze' %}active{% endif %}">
+          <span class="nav-icon">🔍</span> Analyze Text
+        </a>
+        <a href="/bulk" class="nav-item {% if request.path == '/bulk' %}active{% endif %}">
+          <span class="nav-icon">📁</span> Bulk Upload
+        </a>
+        <a href="/voice" class="nav-item {% if request.path == '/voice' %}active{% endif %}">
+          <span class="nav-icon">🎤</span> Voice Input
+        </a>
+        <a href="/history" class="nav-item {% if request.path == '/history' %}active{% endif %}">
+          <span class="nav-icon">📜</span> History
+        </a>
+        <a href="/analytics" class="nav-item {% if request.path == '/analytics' %}active{% endif %}">
+          <span class="nav-icon">📈</span> Analytics
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="model-status" class="model-status">
+          <span class="status-dot loading"></span>
+          <span class="status-text">Checking model...</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main-content">
+      <header class="topbar">
+        <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
+        <h1 class="page-title">{% block page_title %}Dashboard{% endblock %}</h1>
+        <div class="topbar-actions">{% block topbar_actions %}{% endblock %}</div>
+      </header>
+      <div class="content-body">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+
+  <script>
+    // Check model status on load
+    fetch('/health').then(r => r.json()).then(data => {
+      const dot = document.querySelector('.status-dot');
+      const txt = document.querySelector('.status-text');
+      if (data.model_loaded) {
+        dot.className = 'status-dot online';
+        txt.textContent = 'BERT Model Ready';
+      } else {
+        dot.className = 'status-dot offline';
+        txt.textContent = 'VADER-only mode';
+      }
+    }).catch(() => {});
+
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('open');
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — SentimentAI{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+  <!-- Stats cards -->
+  <div class="stats-grid" id="stats-grid">
+    <div class="stat-card positive">
+      <div class="stat-icon">✅</div>
+      <div class="stat-info">
+        <div class="stat-value" id="stat-positive">—</div>
+        <div class="stat-label">Positive</div>
+      </div>
+    </div>
+    <div class="stat-card negative">
+      <div class="stat-icon">❌</div>
+      <div class="stat-info">
+        <div class="stat-value" id="stat-negative">—</div>
+        <div class="stat-label">Negative</div>
+      </div>
+    </div>
+    <div class="stat-card neutral">
+      <div class="stat-icon">⚪</div>
+      <div class="stat-info">
+        <div class="stat-value" id="stat-neutral">—</div>
+        <div class="stat-label">Neutral</div>
+      </div>
+    </div>
+    <div class="stat-card total">
+      <div class="stat-icon">📊</div>
+      <div class="stat-info">
+        <div class="stat-value" id="stat-total">—</div>
+        <div class="stat-label">Total Analyzed</div>
+      </div>
+    </div>
+    <div class="stat-card confidence">
+      <div class="stat-icon">🎯</div>
+      <div class="stat-info">
+        <div class="stat-value" id="stat-conf">—</div>
+        <div class="stat-label">Avg Confidence</div>
+      </div>
+    </div>
+    <div class="stat-card sarcasm">
+      <div class="stat-icon">😏</div>
+      <div class="stat-info">
+        <div class="stat-value" id="stat-sarcasm">—</div>
+        <div class="stat-label">Sarcasm Detected</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Model Summary Card -->
+  <div class="model-summary-card" id="model-summary-card">
+    <div class="model-summary-header">
+      <h3>Model Performance Summary</h3>
+      <span class="model-badge" id="model-badge">Loading...</span>
+    </div>
+    <div class="model-metrics-grid" id="model-metrics-grid">
+      <div class="model-metric"><div class="mm-val" id="mm-accuracy">—</div><div class="mm-label">Test Accuracy</div></div>
+      <div class="model-metric"><div class="mm-val" id="mm-f1">—</div><div class="mm-label">Macro F1</div></div>
+      <div class="model-metric"><div class="mm-val" id="mm-dataset">—</div><div class="mm-label">Dataset Size</div></div>
+      <div class="model-metric"><div class="mm-val" id="mm-epochs">—</div><div class="mm-label">Epochs Trained</div></div>
+      <div class="model-metric"><div class="mm-val" id="mm-date">—</div><div class="mm-label">Last Trained</div></div>
+      <div class="model-metric"><div class="mm-val" id="mm-device">—</div><div class="mm-label">Device</div></div>
+    </div>
+    <div class="model-per-class" id="model-per-class"></div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="charts-row">
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3>Sentiment Distribution</h3>
+      </div>
+      <div class="chart-body">
+        <canvas id="chart-distribution" width="280" height="280"></canvas>
+      </div>
+    </div>
+    <div class="chart-card wide">
+      <div class="chart-header">
+        <h3>Daily Trend</h3>
+        <div class="chart-controls">
+          <button class="btn-sm active" onclick="loadTrend(7, this)">7d</button>
+          <button class="btn-sm" onclick="loadTrend(14, this)">14d</button>
+          <button class="btn-sm" onclick="loadTrend(30, this)">30d</button>
+        </div>
+      </div>
+      <div class="chart-body">
+        <canvas id="chart-trend"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Analyze -->
+  <div class="quick-analyze-card">
+    <h3>Quick Analyze</h3>
+    <div class="quick-form">
+      <textarea id="quick-text" class="quick-textarea" placeholder="Paste a review here to analyze instantly..." rows="3"></textarea>
+      <button class="btn-primary" onclick="quickAnalyze()">Analyze →</button>
+    </div>
+    <div id="quick-result" class="quick-result hidden"></div>
+  </div>
+
+  <!-- Recent history -->
+  <div class="recent-card">
+    <div class="card-header">
+      <h3>Recent Predictions</h3>
+      <a href="/history" class="btn-link">View all →</a>
+    </div>
+    <div class="recent-table-wrap">
+      <table class="data-table" id="recent-table">
+        <thead>
+          <tr><th>Text</th><th>Sentiment</th><th>Confidence</th><th>Sarcasm</th><th>Time</th></tr>
+        </thead>
+        <tbody id="recent-tbody">
+          <tr><td colspan="5" class="empty-row">No predictions yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let distChart, trendChart;
+
+async function loadDashboard() {
+  const res = await fetch('/api/analytics');
+  const data = await res.json();
+
+  document.getElementById('stat-positive').textContent = data.dashboard.positive.toLocaleString();
+  document.getElementById('stat-negative').textContent = data.dashboard.negative.toLocaleString();
+  document.getElementById('stat-neutral').textContent = data.dashboard.neutral.toLocaleString();
+  document.getElementById('stat-total').textContent = data.dashboard.total.toLocaleString();
+  document.getElementById('stat-conf').textContent = (data.dashboard.avg_confidence * 100).toFixed(1) + '%';
+  document.getElementById('stat-sarcasm').textContent = data.dashboard.sarcasm_count.toLocaleString();
+
+  renderDistribution(data.distribution);
+  renderTrend(data.trend);
+}
+
+function renderDistribution(dist) {
+  const ctx = document.getElementById('chart-distribution').getContext('2d');
+  if (distChart) distChart.destroy();
+  distChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: dist.labels,
+      datasets: [{ data: dist.values, backgroundColor: dist.colors, borderWidth: 0, hoverOffset: 8 }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#cbd5e1', padding: 16, font: { size: 13 } } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed} (${((ctx.parsed / ctx.dataset.data.reduce((a,b)=>a+b,0))*100).toFixed(1)}%)` } }
+      },
+      cutout: '65%',
+    }
+  });
+}
+
+function renderTrend(trend) {
+  const ctx = document.getElementById('chart-trend').getContext('2d');
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: trend.dates,
+      datasets: [
+        { label: 'Positive', data: trend.positive, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.12)', tension: 0.4, fill: true },
+        { label: 'Negative', data: trend.negative, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.12)', tension: 0.4, fill: true },
+        { label: 'Neutral',  data: trend.neutral,  borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.12)', tension: 0.4, fill: true },
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#cbd5e1' } } },
+      scales: {
+        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.06)' }, beginAtZero: true }
+      }
+    }
+  });
+}
+
+async function loadTrend(days, btn) {
+  document.querySelectorAll('.chart-controls .btn-sm').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const res = await fetch(`/api/analytics/trend?days=${days}`);
+  const trend = await res.json();
+  renderTrend(trend);
+}
+
+async function loadRecent() {
+  const res = await fetch('/api/history?per_page=5');
+  const data = await res.json();
+  const tbody = document.getElementById('recent-tbody');
+  if (!data.records.length) return;
+  tbody.innerHTML = data.records.map(r => `
+    <tr>
+      <td class="text-cell" title="${escHtml(r.original_text)}">${escHtml(r.original_text.substring(0,60))}${r.original_text.length>60?'...':''}</td>
+      <td><span class="badge badge-${r.predicted_sentiment.toLowerCase()}">${r.predicted_sentiment}</span></td>
+      <td>${(r.confidence_score*100).toFixed(1)}%</td>
+      <td>${r.sarcasm_detected ? '😏 Yes' : '—'}</td>
+      <td class="time-cell">${formatTime(r.timestamp)}</td>
+    </tr>`).join('');
+}
+
+async function quickAnalyze() {
+  const text = document.getElementById('quick-text').value.trim();
+  if (!text) return;
+  const resultEl = document.getElementById('quick-result');
+  resultEl.innerHTML = '<div class="spinner"></div>';
+  resultEl.classList.remove('hidden');
+  try {
+    const res = await fetch('/api/predict', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) });
+    const data = await res.json();
+    resultEl.innerHTML = buildResultHtml(data);
+    loadDashboard();
+    loadRecent();
+  } catch(e) {
+    resultEl.innerHTML = '<p class="error">Prediction failed.</p>';
+  }
+}
+
+function buildResultHtml(d) {
+  const icons = { Positive:'✅', Negative:'❌', Neutral:'⚪' };
+  return `<div class="result-box result-${d.predicted_sentiment.toLowerCase()}">
+    <div class="result-main">${icons[d.predicted_sentiment] || ''} <strong>${d.predicted_sentiment}</strong> <span class="conf-badge">${(d.confidence_score*100).toFixed(1)}%</span> ${d.sarcasm_detected ? '<span class="sarcasm-tag">😏 Sarcasm detected</span>' : ''}</div>
+    <div class="result-bars">
+      <div class="bar-row"><span>Positive</span><div class="bar"><div class="bar-fill positive" style="width:${(d.probabilities.positive*100).toFixed(0)}%"></div></div><span>${(d.probabilities.positive*100).toFixed(1)}%</span></div>
+      <div class="bar-row"><span>Neutral</span><div class="bar"><div class="bar-fill neutral" style="width:${(d.probabilities.neutral*100).toFixed(0)}%"></div></div><span>${(d.probabilities.neutral*100).toFixed(1)}%</span></div>
+      <div class="bar-row"><span>Negative</span><div class="bar"><div class="bar-fill negative" style="width:${(d.probabilities.negative*100).toFixed(0)}%"></div></div><span>${(d.probabilities.negative*100).toFixed(1)}%</span></div>
+    </div>
+    <div class="result-meta">VADER: ${d.vader_sentiment} (${d.vader_scores.compound.toFixed(3)}) | BERT: ${d.bert_sentiment} | ${d.processing_time_ms.toFixed(0)}ms</div>
+  </div>`;
+}
+
+function formatTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function loadModelSummary() {
+  try {
+    const res = await fetch('/api/model_info');
+    const d = await res.json();
+    document.getElementById('mm-accuracy').textContent = d.test_accuracy ? (d.test_accuracy * 100).toFixed(2) + '%' : '—';
+    document.getElementById('mm-f1').textContent = d.test_macro_f1 ? (d.test_macro_f1 * 100).toFixed(2) + '%' : '—';
+    document.getElementById('mm-dataset').textContent = d.dataset_size ? d.dataset_size.toLocaleString() : '—';
+    document.getElementById('mm-epochs').textContent = d.epochs_trained ? d.epochs_trained + ' epochs' : '—';
+    document.getElementById('mm-date').textContent = d.last_trained || '—';
+    document.getElementById('mm-device').textContent = d.device ? d.device.toUpperCase() : '—';
+
+    const badge = document.getElementById('model-badge');
+    if (d.model_loaded) {
+      badge.textContent = 'BERT Ready';
+      badge.className = 'model-badge badge-ready';
+    } else {
+      badge.textContent = 'VADER-only';
+      badge.className = 'model-badge badge-vader';
+    }
+
+    if (d.per_class) {
+      const pc = document.getElementById('model-per-class');
+      pc.innerHTML = Object.entries(d.per_class).map(([lbl, vals]) => `
+        <div class="pc-row">
+          <span class="pc-label ${lbl.toLowerCase()}">${lbl}</span>
+          <div class="pc-bar-wrap">
+            <div class="pc-bar ${lbl.toLowerCase()}" style="width:${(vals.f1*100).toFixed(0)}%"></div>
+          </div>
+          <span class="pc-f1">F1 ${(vals.f1*100).toFixed(1)}%</span>
+          <span class="pc-n">${vals.support} samples</span>
+        </div>`).join('');
+    }
+  } catch(e) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadDashboard(); loadRecent(); loadModelSummary(); });
+</script>
+{% endblock %}

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Bulk Upload — SentimentAI{% endblock %}
+{% block page_title %}Bulk Upload{% endblock %}
+
+{% block content %}
+<div class="bulk-page">
+  <div class="upload-card">
+    <h3>Upload CSV or Excel File</h3>
+    <p class="upload-hint">Your file must have a text column (e.g. <code>text</code>, <code>review</code>, <code>comment</code>). Results are returned as a downloadable CSV.</p>
+
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="file-input" accept=".csv,.xlsx,.xls" hidden onchange="handleFileSelect(this)" />
+      <div class="drop-icon">📂</div>
+      <p class="drop-text">Drag & drop your CSV/Excel file here</p>
+      <p class="drop-sub">or</p>
+      <button class="btn-primary" onclick="document.getElementById('file-input').click()">Browse File</button>
+      <p class="drop-formats">Supported: .csv, .xlsx, .xls — Max 32MB</p>
+    </div>
+
+    <div id="file-info" class="file-info hidden">
+      <span class="file-icon">📄</span>
+      <span id="file-name">filename.csv</span>
+      <button class="btn-icon" onclick="clearFile()">✕</button>
+    </div>
+
+    <div class="upload-options">
+      <label>Text Column Name:</label>
+      <input type="text" id="text-col" value="text" class="input-sm" placeholder="text" />
+    </div>
+
+    <button class="btn-primary btn-wide" id="upload-btn" onclick="startBatch()" disabled>
+      Start Batch Analysis
+    </button>
+  </div>
+
+  <!-- Progress -->
+  <div id="progress-card" class="progress-card hidden">
+    <h3>Processing...</h3>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+    </div>
+    <p id="progress-text">0 / 0 records processed</p>
+    <div id="progress-summary" class="progress-summary hidden">
+      <div class="sum-chip positive">✅ <span id="sum-pos">0</span> Positive</div>
+      <div class="sum-chip negative">❌ <span id="sum-neg">0</span> Negative</div>
+      <div class="sum-chip neutral">⚪ <span id="sum-neu">0</span> Neutral</div>
+    </div>
+    <button id="download-btn" class="btn-success hidden" onclick="downloadResult()">⬇ Download Results CSV</button>
+  </div>
+
+  <!-- Recent batch jobs -->
+  <div class="recent-card">
+    <h3>Recent Batch Jobs</h3>
+    <table class="data-table" id="jobs-table">
+      <thead><tr><th>Job ID</th><th>File</th><th>Status</th><th>Records</th><th>Summary</th><th>Started</th><th>Actions</th></tr></thead>
+      <tbody id="jobs-tbody"><tr><td colspan="7" class="empty-row">No jobs yet</td></tr></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedFile = null;
+let currentJobId = null;
+let pollInterval = null;
+
+const dropzone = document.getElementById('dropzone');
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) setFile(file);
+});
+
+function handleFileSelect(input) { if (input.files[0]) setFile(input.files[0]); }
+
+function setFile(file) {
+  selectedFile = file;
+  document.getElementById('file-name').textContent = file.name;
+  document.getElementById('file-info').classList.remove('hidden');
+  document.getElementById('upload-btn').disabled = false;
+}
+
+function clearFile() {
+  selectedFile = null;
+  document.getElementById('file-input').value = '';
+  document.getElementById('file-info').classList.add('hidden');
+  document.getElementById('upload-btn').disabled = true;
+}
+
+async function startBatch() {
+  if (!selectedFile) return;
+  const textCol = document.getElementById('text-col').value || 'text';
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+  fd.append('text_col', textCol);
+
+  document.getElementById('upload-btn').disabled = true;
+  document.getElementById('progress-card').classList.remove('hidden');
+  document.getElementById('download-btn').classList.add('hidden');
+
+  const res = await fetch('/api/batch_predict', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+
+  currentJobId = data.job_id;
+  startPolling(currentJobId);
+}
+
+function startPolling(jobId) {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(() => pollJob(jobId), 2000);
+}
+
+async function pollJob(jobId) {
+  const res = await fetch(`/api/batch_status/${jobId}`);
+  const job = await res.json();
+
+  const pct = job.total_records > 0 ? (job.processed_records / job.total_records * 100).toFixed(0) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-text').textContent = `${job.processed_records.toLocaleString()} / ${job.total_records.toLocaleString()} records processed`;
+
+  if (job.status === 'done') {
+    clearInterval(pollInterval);
+    document.getElementById('progress-summary').classList.remove('hidden');
+    document.getElementById('sum-pos').textContent = job.positive_count;
+    document.getElementById('sum-neg').textContent = job.negative_count;
+    document.getElementById('sum-neu').textContent = job.neutral_count;
+    document.getElementById('download-btn').classList.remove('hidden');
+    document.getElementById('progress-bar').style.width = '100%';
+    loadJobs();
+  } else if (job.status === 'failed') {
+    clearInterval(pollInterval);
+    document.getElementById('progress-text').textContent = 'Failed: ' + (job.error_message || 'Unknown error');
+  }
+}
+
+function downloadResult() {
+  if (currentJobId) window.location.href = `/api/batch_download/${currentJobId}`;
+}
+
+async function loadJobs() {
+  // Load recent batch jobs from history
+  const tbody = document.getElementById('jobs-tbody');
+  // We don't have a dedicated endpoint for all jobs, but we show last few
+  tbody.innerHTML = '<tr><td colspan="7" class="empty-row">Jobs appear after completion</td></tr>';
+}
+
+document.addEventListener('DOMContentLoaded', loadJobs);
+</script>
+{% endblock %}

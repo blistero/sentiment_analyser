@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Analytics — SentimentAI{% endblock %}
+{% block page_title %}Analytics{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn-secondary" onclick="window.location.href='/api/analytics/export'">⬇ Export Report</button>
+{% endblock %}
+
+{% block content %}
+<div class="analytics-page">
+  <!-- Summary KPI row -->
+  <div class="kpi-row" id="kpi-row">
+    <div class="kpi-card"><div class="kpi-val" id="kpi-total">—</div><div class="kpi-label">Total Predictions</div></div>
+    <div class="kpi-card"><div class="kpi-val positive" id="kpi-pos-pct">—</div><div class="kpi-label">Positive Rate</div></div>
+    <div class="kpi-card"><div class="kpi-val negative" id="kpi-neg-pct">—</div><div class="kpi-label">Negative Rate</div></div>
+    <div class="kpi-card"><div class="kpi-val" id="kpi-conf">—</div><div class="kpi-label">Avg Confidence</div></div>
+    <div class="kpi-card"><div class="kpi-val" id="kpi-sarc">—</div><div class="kpi-label">Sarcasm Rate</div></div>
+  </div>
+
+  <!-- Charts grid -->
+  <div class="analytics-grid">
+    <div class="chart-card">
+      <div class="chart-header"><h3>Sentiment Distribution</h3></div>
+      <canvas id="chart-pie"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3>Daily Trend</h3>
+        <div class="chart-controls">
+          <button class="btn-sm active" onclick="loadTrendChart(7, this)">7d</button>
+          <button class="btn-sm" onclick="loadTrendChart(14, this)">14d</button>
+          <button class="btn-sm" onclick="loadTrendChart(30, this)">30d</button>
+        </div>
+      </div>
+      <canvas id="chart-trend"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header">
+        <h3>Confidence Distribution</h3>
+      </div>
+      <canvas id="chart-confidence"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header"><h3>Source Breakdown</h3></div>
+      <canvas id="chart-source"></canvas>
+    </div>
+  </div>
+
+  <!-- Keywords -->
+  <div class="keywords-card">
+    <div class="chart-header">
+      <h3>Top Keywords</h3>
+      <div class="chart-controls">
+        <button class="btn-sm active" onclick="loadKeywords('', this)">All</button>
+        <button class="btn-sm" onclick="loadKeywords('Positive', this)">Positive</button>
+        <button class="btn-sm" onclick="loadKeywords('Negative', this)">Negative</button>
+        <button class="btn-sm" onclick="loadKeywords('Neutral', this)">Neutral</button>
+      </div>
+    </div>
+    <div id="keyword-cloud" class="keyword-cloud"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let pieChart, trendChart, confChart, sourceChart;
+
+async function loadAll() {
+  const res = await fetch('/api/analytics?days=7');
+  const data = await res.json();
+  renderKPIs(data.dashboard, data.sarcasm);
+  renderPie(data.distribution);
+  renderTrend(data.trend);
+  renderConfidence(data.confidence_histogram);
+  renderSource(data.source_breakdown);
+  renderKeywords(data.top_keywords);
+}
+
+function renderKPIs(dash, sarc) {
+  document.getElementById('kpi-total').textContent = dash.total.toLocaleString();
+  document.getElementById('kpi-pos-pct').textContent = dash.positive_pct + '%';
+  document.getElementById('kpi-neg-pct').textContent = dash.negative_pct + '%';
+  document.getElementById('kpi-conf').textContent = (dash.avg_confidence * 100).toFixed(1) + '%';
+  document.getElementById('kpi-sarc').textContent = sarc.rate + '%';
+}
+
+function renderPie(dist) {
+  const ctx = document.getElementById('chart-pie').getContext('2d');
+  if (pieChart) pieChart.destroy();
+  pieChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels: dist.labels, datasets: [{ data: dist.values, backgroundColor: dist.colors, borderWidth: 0 }] },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { color: '#cbd5e1', font: { size: 12 } } } },
+      cutout: '60%'
+    }
+  });
+}
+
+function renderTrend(trend) {
+  const ctx = document.getElementById('chart-trend').getContext('2d');
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: trend.dates,
+      datasets: [
+        { label: 'Positive', data: trend.positive, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)', tension: 0.4, fill: true },
+        { label: 'Negative', data: trend.negative, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', tension: 0.4, fill: true },
+        { label: 'Neutral',  data: trend.neutral,  borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', tension: 0.4, fill: true },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#cbd5e1' } } },
+      scales: { x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } }, y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true } }
+    }
+  });
+}
+
+function renderConfidence(hist) {
+  const ctx = document.getElementById('chart-confidence').getContext('2d');
+  if (confChart) confChart.destroy();
+  confChart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: hist.bins, datasets: [{ label: 'Count', data: hist.counts, backgroundColor: 'rgba(99,102,241,0.7)', borderRadius: 4 }] },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { x: { ticks: { color: '#94a3b8' }, grid: { display: false } }, y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true } }
+    }
+  });
+}
+
+function renderSource(src) {
+  const ctx = document.getElementById('chart-source').getContext('2d');
+  if (sourceChart) sourceChart.destroy();
+  const sources = Object.keys(src);
+  if (!sources.length) return;
+  sourceChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: sources,
+      datasets: [
+        { label: 'Positive', data: sources.map(s => src[s].Positive || 0), backgroundColor: '#22c55e' },
+        { label: 'Negative', data: sources.map(s => src[s].Negative || 0), backgroundColor: '#ef4444' },
+        { label: 'Neutral',  data: sources.map(s => src[s].Neutral  || 0), backgroundColor: '#f59e0b' },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#cbd5e1' } } },
+      scales: { x: { stacked: true, ticks: { color: '#94a3b8' }, grid: { display: false } }, y: { stacked: true, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true } }
+    }
+  });
+}
+
+function renderKeywords(keywords) {
+  const cloud = document.getElementById('keyword-cloud');
+  if (!keywords.length) { cloud.innerHTML = '<p class="empty-row">No keywords yet</p>'; return; }
+  const max = keywords[0].count;
+  cloud.innerHTML = keywords.map(k => {
+    const size = Math.floor(12 + (k.count / max) * 20);
+    const opacity = 0.4 + (k.count / max) * 0.6;
+    return `<span class="keyword-chip" style="font-size:${size}px;opacity:${opacity}">${k.word} <small>${k.count}</small></span>`;
+  }).join('');
+}
+
+async function loadTrendChart(days, btn) {
+  document.querySelectorAll('.chart-controls .btn-sm').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const res = await fetch(`/api/analytics/trend?days=${days}`);
+  renderTrend(await res.json());
+}
+
+async function loadKeywords(sentiment, btn) {
+  document.querySelectorAll('.keywords-card .chart-controls .btn-sm').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const url = sentiment ? `/api/analytics/keywords?sentiment=${sentiment}&limit=30` : '/api/analytics/keywords?limit=30';
+  const res = await fetch(url);
+  renderKeywords(await res.json());
+}
+
+document.addEventListener('DOMContentLoaded', loadAll);
+</script>
+{% endblock %}
